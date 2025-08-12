@@ -11,7 +11,6 @@ import (
 	"gochat/models"
 	"gochat/protocol"
 	"gochat/services"
-	"gochat/utils"
 )
 
 // WebSocketHandler handles WebSocket connections for real-time chat

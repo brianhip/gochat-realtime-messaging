@@ -23,11 +23,13 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
 - **Multi-Client Concurrency**: Handles thousands of simultaneous connections using Go's goroutines and channels
 - **WebSocket Communication**: Persistent, full-duplex communication using `github.com/gorilla/websocket`
 - **Room Management**: Dynamic room creation/joining with member state tracking
-- **User Authentication**: Custom username/password system with session tokens
+- **User Authentication**: JWT-based authentication with secure password hashing and salt
 - **Message Broadcasting**: Efficient room-based message distribution
 - **Data Persistence**: MongoDB integration for users, rooms, and message history
 - **Error Handling**: Graceful handling of disconnections and network issues
-- **Clean Protocol**: Custom text-based WebSocket protocol (JOIN, MESSAGE, LEAVE)
+- **Clean Protocol**: JSON-based WebSocket protocol with comprehensive message types
+- **CORS Support**: Cross-origin resource sharing for web frontend integration
+- **Health Monitoring**: Built-in health check and API info endpoints
 
 ### Frontend (React)
 
@@ -36,6 +38,10 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
 - **Authentication Forms**: User registration and login
 - **Room Management**: Easy room switching and creation
 - **User Lists**: Display of currently online room members
+- **Message History**: Automatic loading of recent room messages
+- **Auto-reconnection**: Automatic WebSocket reconnection on connection loss
+- **Responsive Design**: Mobile-friendly interface with adaptive layouts
+- **Real-time Notifications**: User join/leave notifications and typing indicators
 
 ## Architecture
 
@@ -134,12 +140,12 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/your-username/gochat.git
-   cd gochat/backend
+   git clone https://github.com/your-username/gochat-realtime-messaging.git
+   cd gochat-realtime-messaging/backend
    ```
 
 2. **Configure MongoDB:**
-   Ensure your MongoDB instance is running and update `config.go` with your connection URI.
+   Ensure your MongoDB instance is running. The server will use `mongodb://localhost:27017` by default, or set the `MONGO_URI` environment variable.
 
 3. **Install dependencies:**
 
@@ -147,7 +153,13 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
    go mod tidy
    ```
 
-4. **Run the server:**
+4. **Set environment variables (optional):**
+   ```bash
+   export MONGO_URI="mongodb://localhost:27017"
+   export PORT="8080"
+   ```
+
+5. **Run the server:**
    ```bash
    go run main.go
    ```
@@ -158,7 +170,7 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
 1. **Navigate to frontend directory:**
 
    ```bash
-   cd gochat/frontend
+   cd ../frontend
    ```
 
 2. **Install dependencies:**
@@ -182,6 +194,43 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
 5. Join existing rooms or create new ones
 6. Start chatting! Open multiple tabs to simulate multiple users
 
+## API Endpoints
+
+### Authentication Endpoints
+
+- `POST /api/auth/register` - Register a new user
+- `POST /api/auth/login` - Login with username and password
+- `POST /api/auth/validate` - Validate JWT token (requires Authorization header)
+- `POST /api/auth/refresh` - Refresh JWT token (requires Authorization header)
+
+### Utility Endpoints
+
+- `GET /api/health` - Health check endpoint
+- `GET /api/info` - API information and available endpoints
+
+### WebSocket Endpoint
+
+- `WS /ws?token=<jwt_token>` - Real-time chat connection
+
+### WebSocket Message Types
+
+**Client to Server:**
+- `JOIN` - Join a chat room
+- `LEAVE` - Leave current room
+- `MESSAGE` - Send a chat message
+- `PING` - Connection health check
+
+**Server to Client:**
+- `JOINED_ROOM` - Confirmation of room join
+- `LEFT_ROOM` - Confirmation of room leave
+- `NEW_MESSAGE` - New chat message broadcast
+- `USER_JOINED` - User joined room notification
+- `USER_LEFT` - User left room notification
+- `USER_LIST` - Current users in room
+- `ROOM_HISTORY` - Historical messages for room
+- `ERROR` - Error message
+- `PONG` - Response to ping
+
 ## Project Structure
 
 ```
@@ -190,7 +239,7 @@ gochat-realtime-messaging/
 │   ├── main.go               # Server entry point
 │   ├── handlers/             # HTTP and WebSocket handlers
 │   │   ├── auth.go
-│   │   └── websocket.go
+│   │   └── websockets.go
 │   ├── models/               # Data structures
 │   │   ├── user.go
 │   │   ├── message.go
@@ -232,6 +281,12 @@ This project provides hands-on experience with:
 - **Authentication Systems**: Implementing secure token-based authentication
 - **Full-Stack Development**: Connecting Go backend with React frontend
 - **Debugging Concurrent Systems**: Identifying and resolving race conditions
+- **Real-time Web Applications**: Building responsive, event-driven user interfaces
+- **JWT Authentication**: Implementing secure token-based authentication flows
+- **React State Management**: Managing complex application state and side effects
+- **WebSocket Client Development**: Handling connection management and reconnection logic
+- **Responsive Web Design**: Creating mobile-friendly, adaptive user interfaces
+- **RESTful API Design**: Structuring HTTP endpoints for authentication and data access
 
 ## Contributing
 
