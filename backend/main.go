@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/joho/godotenv"
+
 	"gochat/db"
 	"gochat/handlers"
 	"gochat/services"
@@ -14,6 +16,11 @@ import (
 // It initializes the database, sets up services, configures routes, and starts the HTTP server
 func main() {
 	log.Println("Starting GoChat server...")
+
+	// Load environment variables from .env file (if it exists)
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
 
 	// Initialize MongoDB connection
 	mongoURI := getEnvOrDefault("MONGO_URI", "mongodb://localhost:27017")

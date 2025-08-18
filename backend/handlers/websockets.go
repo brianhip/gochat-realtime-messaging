@@ -262,17 +262,15 @@ func (h *WebSocketHandler) handleChatMessage(conn *websocket.Conn, user *models.
 		RoomName: roomName,
 	}
 
-	// Broadcast message to all clients in the room
+	// Broadcast message to all clients in the room (including sender)
 	broadcastMsg, err := protocol.NewWebSocketMessage(protocol.MessageTypeNewMessage, newMsgPayload)
 	if err != nil {
 		log.Printf("Error creating broadcast message: %v", err)
 		return
 	}
 
-	h.chatService.BroadcastMessage(roomName, broadcastMsg, user.Username)
-
-	// Also send the message back to the sender for confirmation
-	conn.WriteJSON(broadcastMsg)
+	// Broadcast to all clients including the sender (don't exclude sender)
+	h.chatService.BroadcastMessage(roomName, broadcastMsg, "")
 
 	log.Printf("Message from %s in room %s: %s", user.Username, roomName, msgPayload.Content)
 }

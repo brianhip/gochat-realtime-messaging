@@ -273,6 +273,26 @@ class WebSocketService {
   }
 
   /**
+   * Clear all event listeners
+   */
+  clearAllListeners() {
+    this.eventListeners = {
+      open: [],
+      close: [],
+      error: [],
+      message: [],
+      userJoined: [],
+      userLeft: [],
+      newMessage: [],
+      userList: [],
+      joinedRoom: [],
+      leftRoom: [],
+      roomHistory: [],
+      ping: []
+    };
+  }
+
+  /**
    * Emit an event to all listeners
    * @param {string} event - Event name
    * @param {*} data - Event data
@@ -295,7 +315,8 @@ class WebSocketService {
    */
   getWebSocketUrl() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
+    // Use the backend server URL instead of frontend host
+    const host = 'localhost:8080';
     return `${protocol}//${host}/ws?token=${this.token}`;
   }
 
