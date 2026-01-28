@@ -45,40 +45,197 @@ Traditional request-response models (like standard HTTP) are inefficient for rea
 
 ## Architecture
 
+### System Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        Browser[Browser]
+        ReactApp[React Application]
+        WSClient[WebSocket Client]
+        Browser --> ReactApp
+        ReactApp --> WSClient
+    end
+
+    subgraph "Backend Layer"
+        HTTPServer[HTTP Server :8080]
+        AuthHandler[Auth Handler]
+        WSHandler[WebSocket Handler]
+        AuthService[Auth Service]
+        ChatService[Chat Service]
+
+        HTTPServer --> AuthHandler
+        HTTPServer --> WSHandler
+        AuthHandler --> AuthService
+        WSHandler --> AuthService
+        WSHandler --> ChatService
+    end
+
+    subgraph "Data Layer"
+        MongoDB[(MongoDB)]
+        UsersCollection[Users Collection]
+        MessagesCollection[Messages Collection]
+        RoomsCollection[Rooms Collection]
+
+        MongoDB --> UsersCollection
+        MongoDB --> MessagesCollection
+        MongoDB --> RoomsCollection
+    end
+
+    WSClient -->|WebSocket Connection| WSHandler
+    ReactApp -->|HTTP/REST| AuthHandler
+
+    AuthService --> MongoDB
+    ChatService --> MongoDB
+
+    style Browser fill:#e1f5ff
+    style ReactApp fill:#61dafb
+    style HTTPServer fill:#00add8
+    style MongoDB fill:#4db33d
 ```
-+----------------+
-|  React Client  |
-| (Browser)      |
-+--------+-------+
-         | WebSocket
-         |
-+--------v-------+
-| GoChat Server  |
-| (Main Goroutine)|
-+--------+-------+
-         |
-         | Goroutine for each client
-         |
-+--------v-------+        +------------+
-| Client Handler |------->| Central    |
-| (Goroutine)    |<-------| Message    |
-|                |        | Router     |
-|                |------->| (Channels) |
-+----------------+        +------------+
-         |                      |
-         |                      |
-         |                      v
-         |              +----------------+
-         |              | Room Management|
-         |              |  (Shared State)|
-         |              | (Mutex-protected)|
-         |              +--------+-------+
-         |                       |
-         |                       v
-         |              +-----------------+
-         +------------->| MongoDB Driver  |
-                        | (Data Persistence)|
-                        +-----------------+
+
+### Backend Architecture (Go)
+
+```mermaid
+graph TB
+    subgraph "HTTP Layer"
+        Router[Route Handler]
+        CORS[CORS Middleware]
+    end
+
+    subgraph "Handler Layer"
+        AuthH[Auth Handler<br/>- Register<br/>- Login<br/>- Validate<br/>- Refresh]
+        WSH[WebSocket Handler<br/>- Connection Upgrade<br/>- Message Routing]
+    end
+
+    subgraph "Service Layer"
+        AuthS[Auth Service<br/>- User Management<br/>- JWT Generation<br/>- Password Hashing]
+        ChatS[Chat Service<br/>- Room Management<br/>- Message Broadcasting<br/>- User State]
+    end
+
+    subgraph "Data Layer"
+        DB[MongoDB Driver<br/>- Connection Pool<br/>- CRUD Operations]
+    end
+
+    subgraph "Models"
+        User[User Model]
+        Message[Message Model]
+        Room[Room Model]
+    end
+
+    subgraph "Protocol"
+        WSMsg[WebSocket Messages<br/>- JOIN/LEAVE<br/>- MESSAGE<br/>- PING/PONG]
+    end
+
+    Router --> CORS
+    CORS --> AuthH
+    CORS --> WSH
+
+    AuthH --> AuthS
+    WSH --> AuthS
+    WSH --> ChatS
+
+    AuthS --> DB
+    ChatS --> DB
+
+    AuthS -.-> User
+    ChatS -.-> Message
+    ChatS -.-> Room
+    WSH -.-> WSMsg
+
+    style AuthH fill:#ffd700
+    style WSH fill:#ffd700
+    style AuthS fill:#87ceeb
+    style ChatS fill:#87ceeb
+    style DB fill:#90ee90
+```
+
+### Frontend Architecture (React)
+
+```mermaid
+graph TB
+    subgraph "App Component"
+        App[App.js<br/>- Auth State<br/>- Routing Logic]
+    end
+
+    subgraph "Pages"
+        Login[LoginPage<br/>- Login Form<br/>- Register Form]
+        Chat[ChatPage<br/>- Chat Interface<br/>- WebSocket Manager]
+    end
+
+    subgraph "Components"
+        RoomSelector[RoomSelector<br/>- Room List<br/>- Create Room<br/>- Switch Room]
+        MessageList[MessageList<br/>- Message Display<br/>- User Notifications<br/>- Auto-scroll]
+        MessageInput[MessageInput<br/>- Text Input<br/>- Send Message]
+        UserList[UserList<br/>- Online Users<br/>- Room Members]
+    end
+
+    subgraph "Services"
+        WSService[WebSocket Service<br/>- Connection Management<br/>- Message Handlers<br/>- Auto-reconnect]
+        AuthService[Auth Service<br/>- Login/Register API<br/>- Token Management]
+    end
+
+    subgraph "State Management"
+        LocalStorage[LocalStorage<br/>- Token<br/>- User Data]
+        ReactState[React State<br/>- Messages<br/>- Rooms<br/>- Users]
+    end
+
+    App --> Login
+    App --> Chat
+
+    Login --> AuthService
+
+    Chat --> RoomSelector
+    Chat --> MessageList
+    Chat --> MessageInput
+    Chat --> UserList
+    Chat --> WSService
+
+    WSService --> ReactState
+    AuthService --> LocalStorage
+
+    LocalStorage --> App
+    ReactState --> MessageList
+    ReactState --> RoomSelector
+    ReactState --> UserList
+
+    style App fill:#61dafb
+    style Login fill:#90ee90
+    style Chat fill:#90ee90
+    style WSService fill:#ffd700
+    style AuthService fill:#ffd700
+```
+
+### Real-time Message Flow
+
+```mermaid
+sequenceDiagram
+    participant Client1
+    participant WSClient
+    participant WSHandler
+    participant ChatService
+    participant MongoDB
+    participant Client2
+
+    Client1->>WSClient: Type & Send Message
+    WSClient->>WSHandler: MESSAGE (WebSocket)
+    WSHandler->>WSHandler: Validate User & Room
+    WSHandler->>ChatService: Broadcast Message
+    ChatService->>MongoDB: Save Message
+    MongoDB-->>ChatService: Confirm Save
+
+    par Broadcast to all room members
+        ChatService->>WSHandler: Forward to Client1
+        ChatService->>WSHandler: Forward to Client2
+    end
+
+    WSHandler->>WSClient: NEW_MESSAGE
+    WSHandler->>Client2: NEW_MESSAGE
+
+    WSClient->>Client1: Update UI (Message List)
+    Client2->>Client2: Update UI (Message List)
+
+    Note over Client1,Client2: All users in the same room<br/>receive the message instantly
 ```
 
 ## Technical Implementation
