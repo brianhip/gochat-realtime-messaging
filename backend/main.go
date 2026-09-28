@@ -10,7 +10,12 @@ import (
 	"gochat/db"
 	"gochat/handlers"
 	"gochat/services"
+	"gochat/utils"
 )
+
+// minJWTSecretLength is the minimum acceptable length (in bytes) for
+// JWT_SECRET. Anything shorter is rejected as too weak to sign tokens with.
+const minJWTSecretLength = 32
 
 // main is the entry point of the GoChat server
 // It initializes the database, sets up services, configures routes, and starts the HTTP server
@@ -21,6 +26,15 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment variables")
 	}
+
+	// Load and validate the JWT signing secret. There is no default: a
+	// missing or weak secret would let anyone forge valid tokens, so the
+	// server refuses to start rather than silently falling back.
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if len(jwtSecret) < minJWTSecretLength {
+		log.Fatalf("JWT_SECRET environment variable must be set and at least %d characters long", minJWTSecretLength)
+	}
+	utils.SetJWTSecret(jwtSecret)
 
 	// Initialize MongoDB connection
 	mongoURI := getEnvOrDefault("MONGO_URI", "mongodb://localhost:27017")

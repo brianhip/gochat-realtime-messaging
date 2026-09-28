@@ -11,8 +11,17 @@ import (
 )
 
 // JWT secret key for signing tokens
-// In production, this should be loaded from environment variables
-var jwtSecret = []byte("your-secret-key-change-this-in-production")
+// This must be set at startup via SetJWTSecret before any token is
+// generated or validated; there is no default.
+var jwtSecret []byte
+
+// SetJWTSecret configures the secret key used to sign and verify JWTs.
+// It must be called once at application startup (see main.go), which
+// loads the value from the JWT_SECRET environment variable and refuses
+// to start the server if it is missing or too short.
+func SetJWTSecret(secret string) {
+	jwtSecret = []byte(secret)
+}
 
 // Claims represents the JWT token claims for user authentication
 type Claims struct {
