@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './styles/App.css';
 import LoginPage from './pages/LoginPage';
 import ChatPage from './pages/ChatPage';
+import { API_BASE_URL } from './config';
 
 /**
  * Main application component that manages authentication state and routing
@@ -24,7 +25,7 @@ function App() {
 
         if (storedToken && storedUser) {
           // Validate the stored token with the server
-          const response = await fetch('/api/auth/validate', {
+          const response = await fetch(`${API_BASE_URL}/api/auth/validate`, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${storedToken}`,
