@@ -1,462 +1,157 @@
-# GoChat: Real-time Multi-room Chat Application
+# GoChat
 
-A full-stack, real-time chat application built with Go and React, demonstrating robust server-side concurrency, WebSocket communication, and distributed data persistence.
+A real-time, multi-room chat app with a Go WebSocket server and a React frontend. Users sign up, pick a room, and chat live with everyone else in it.
 
-## Overview
+I built it to learn how real-time servers work: long-lived connections, concurrency in Go, and keeping shared state consistent while many clients read and write at once.
 
-GoChat allows multiple users to connect, join various chat rooms, and exchange messages instantly. The application emphasizes understanding the core mechanics of real-time network applications and scalable backend design, utilizing Go's powerful concurrency features and modern web technologies.
+## Features
 
-## Problem Statement
+- **Live chat over WebSockets:** messages show up instantly for everyone in the room.
+- **Multiple rooms:** pick one of the built-in rooms or join any custom room by name. New rooms are created the first time someone joins.
+- **Who's online:** each room shows the users currently in it, updated as people join and leave.
+- **Message history:** the last 50 messages load when you join a room. All messages are stored in MongoDB.
+- **Accounts:** sign up and log in. Passwords are hashed with bcrypt, and logins use JWTs that expire after 24 hours.
+- **Automatic reconnect:** the client tries to reconnect up to 5 times if the connection drops.
 
-Traditional request-response models (like standard HTTP) are inefficient for real-time, interactive communication. Building a chat application requires:
+## Tech stack
 
-- Persistent, bi-directional connection between clients and server
-- Instant message delivery to all relevant participants
-- Efficient handling of thousands of concurrent connections
-- Race condition-free shared state management
-- Reliable message and user data persistence
+| | |
+|---|---|
+| **Backend** | Go, [gorilla/websocket](https://github.com/gorilla/websocket), `net/http`, JWT (`golang-jwt`), bcrypt |
+| **Frontend** | React (Create React App) |
+| **Database** | MongoDB |
 
-## Key Features
-
-### Backend (Go)
-
-- **Multi-Client Concurrency**: Handles thousands of simultaneous connections using Go's goroutines and channels
-- **WebSocket Communication**: Persistent, full-duplex communication using `github.com/gorilla/websocket`
-- **Room Management**: Dynamic room creation/joining with member state tracking
-- **User Authentication**: JWT-based authentication with secure password hashing and salt
-- **Message Broadcasting**: Efficient room-based message distribution
-- **Data Persistence**: MongoDB integration for users, rooms, and message history
-- **Error Handling**: Graceful handling of disconnections and network issues
-- **Clean Protocol**: JSON-based WebSocket protocol with comprehensive message types
-- **CORS Support**: Cross-origin resource sharing for web frontend integration
-- **Health Monitoring**: Built-in health check and API info endpoints
-
-### Frontend (React)
-
-- **Intuitive UI**: Modern, responsive interface
-- **Real-time Updates**: Instant chat feed updates via WebSockets
-- **Authentication Forms**: User registration and login
-- **Room Management**: Easy room switching and creation
-- **User Lists**: Display of currently online room members
-- **Message History**: Automatic loading of recent room messages
-- **Auto-reconnection**: Automatic WebSocket reconnection on connection loss
-- **Responsive Design**: Mobile-friendly interface with adaptive layouts
-- **Real-time Notifications**: User join/leave notifications and typing indicators
-
-## Architecture
-
-### System Architecture Overview
+## How it works
 
 ```mermaid
-graph TB
-    subgraph "Client Layer"
-        Browser[Browser]
-        ReactApp[React Application]
-        WSClient[WebSocket Client]
-        Browser --> ReactApp
-        ReactApp --> WSClient
-    end
-
-    subgraph "Backend Layer"
-        HTTPServer[HTTP Server :8080]
-        AuthHandler[Auth Handler]
-        WSHandler[WebSocket Handler]
-        AuthService[Auth Service]
-        ChatService[Chat Service]
-
-        HTTPServer --> AuthHandler
-        HTTPServer --> WSHandler
-        AuthHandler --> AuthService
-        WSHandler --> AuthService
-        WSHandler --> ChatService
-    end
-
-    subgraph "Data Layer"
-        MongoDB[(MongoDB)]
-        UsersCollection[Users Collection]
-        MessagesCollection[Messages Collection]
-        RoomsCollection[Rooms Collection]
-
-        MongoDB --> UsersCollection
-        MongoDB --> MessagesCollection
-        MongoDB --> RoomsCollection
-    end
-
-    WSClient -->|WebSocket Connection| WSHandler
-    ReactApp -->|HTTP/REST| AuthHandler
-
-    AuthService --> MongoDB
-    ChatService --> MongoDB
-
-    style Browser fill:#e1f5ff
-    style ReactApp fill:#61dafb
-    style HTTPServer fill:#00add8
-    style MongoDB fill:#4db33d
+graph LR
+    Browser[React app] -- "REST: register / login" --> API[Go HTTP server]
+    Browser -- "WebSocket: /ws" --> API
+    API --> Hub[ChatService<br/>one goroutine owns room state]
+    API --> Mongo[(MongoDB<br/>users, rooms, messages)]
+    Hub --> Mongo
 ```
 
-### Backend Architecture (Go)
+**Concurrency model**
 
-```mermaid
-graph TB
-    subgraph "HTTP Layer"
-        Router[Route Handler]
-        CORS[CORS Middleware]
-    end
+- **Each connection gets two goroutines.** One reads messages from the client. The other is the only one that writes to the socket, because gorilla/websocket allows only one writer per connection. Replies, broadcasts and keepalive pings all go through a queue to that writer.
+- **One goroutine owns the room state.** Joins, leaves and broadcasts go through channels to a single `ChatService` loop, so the room maps are never changed from two places at once.
+- **Slow clients can't hold up everyone else.** Each client has a 256-message send queue. If a client falls that far behind, the server disconnects it instead of blocking the broadcast.
+- **Dead connections are cleaned up.** The server pings every 54 seconds and drops connections that don't answer within 60.
 
-    subgraph "Handler Layer"
-        AuthH[Auth Handler<br/>- Register<br/>- Login<br/>- Validate<br/>- Refresh]
-        WSH[WebSocket Handler<br/>- Connection Upgrade<br/>- Message Routing]
-    end
+**Security basics**
 
-    subgraph "Service Layer"
-        AuthS[Auth Service<br/>- User Management<br/>- JWT Generation<br/>- Password Hashing]
-        ChatS[Chat Service<br/>- Room Management<br/>- Message Broadcasting<br/>- User State]
-    end
+- The server refuses to start without a strong `JWT_SECRET`, which must be at least 32 characters.
+- CORS and the WebSocket origin check allow only the frontend addresses listed in `ALLOWED_ORIGINS`.
+- The server checks input: usernames are 3–30 letters, numbers or underscores, passwords 6–72 characters, messages up to 1,000 characters.
 
-    subgraph "Data Layer"
-        DB[MongoDB Driver<br/>- Connection Pool<br/>- CRUD Operations]
-    end
+## Running it locally
 
-    subgraph "Models"
-        User[User Model]
-        Message[Message Model]
-        Room[Room Model]
-    end
+**Prerequisites:** Go 1.23+, Node.js 18+, and MongoDB.
 
-    subgraph "Protocol"
-        WSMsg[WebSocket Messages<br/>- JOIN/LEAVE<br/>- MESSAGE<br/>- PING/PONG]
-    end
+### 1. Start MongoDB
 
-    Router --> CORS
-    CORS --> AuthH
-    CORS --> WSH
+```bash
+# macOS (Homebrew)
+brew tap mongodb/brew && brew install mongodb-community
+brew services start mongodb-community
 
-    AuthH --> AuthS
-    WSH --> AuthS
-    WSH --> ChatS
-
-    AuthS --> DB
-    ChatS --> DB
-
-    AuthS -.-> User
-    ChatS -.-> Message
-    ChatS -.-> Room
-    WSH -.-> WSMsg
-
-    style AuthH fill:#ffd700
-    style WSH fill:#ffd700
-    style AuthS fill:#87ceeb
-    style ChatS fill:#87ceeb
-    style DB fill:#90ee90
+# or with Docker
+docker run -d --name gochat-mongo -p 27017:27017 mongo:7
 ```
 
-### Frontend Architecture (React)
+You can also use a free [MongoDB Atlas](https://www.mongodb.com/atlas) cluster. If you do, set `MONGO_URI` to its connection string.
 
-```mermaid
-graph TB
-    subgraph "App Component"
-        App[App.js<br/>- Auth State<br/>- Routing Logic]
-    end
+### 2. Start the backend
 
-    subgraph "Pages"
-        Login[LoginPage<br/>- Login Form<br/>- Register Form]
-        Chat[ChatPage<br/>- Chat Interface<br/>- WebSocket Manager]
-    end
-
-    subgraph "Components"
-        RoomSelector[RoomSelector<br/>- Room List<br/>- Create Room<br/>- Switch Room]
-        MessageList[MessageList<br/>- Message Display<br/>- User Notifications<br/>- Auto-scroll]
-        MessageInput[MessageInput<br/>- Text Input<br/>- Send Message]
-        UserList[UserList<br/>- Online Users<br/>- Room Members]
-    end
-
-    subgraph "Services"
-        WSService[WebSocket Service<br/>- Connection Management<br/>- Message Handlers<br/>- Auto-reconnect]
-        AuthService[Auth Service<br/>- Login/Register API<br/>- Token Management]
-    end
-
-    subgraph "State Management"
-        LocalStorage[LocalStorage<br/>- Token<br/>- User Data]
-        ReactState[React State<br/>- Messages<br/>- Rooms<br/>- Users]
-    end
-
-    App --> Login
-    App --> Chat
-
-    Login --> AuthService
-
-    Chat --> RoomSelector
-    Chat --> MessageList
-    Chat --> MessageInput
-    Chat --> UserList
-    Chat --> WSService
-
-    WSService --> ReactState
-    AuthService --> LocalStorage
-
-    LocalStorage --> App
-    ReactState --> MessageList
-    ReactState --> RoomSelector
-    ReactState --> UserList
-
-    style App fill:#61dafb
-    style Login fill:#90ee90
-    style Chat fill:#90ee90
-    style WSService fill:#ffd700
-    style AuthService fill:#ffd700
+```bash
+cd backend
+cp .env.example .env
+# Set JWT_SECRET in .env (required). Generate one with:
+#   openssl rand -base64 48
+go run .
 ```
 
-### Real-time Message Flow
+The server listens on `http://localhost:8080`.
 
-```mermaid
-sequenceDiagram
-    participant Client1
-    participant WSClient
-    participant WSHandler
-    participant ChatService
-    participant MongoDB
-    participant Client2
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `JWT_SECRET` | **yes** | — | Signs login tokens. At least 32 characters. |
+| `MONGO_URI` | no | `mongodb://localhost:27017` | MongoDB connection string |
+| `PORT` | no | `8080` | Port the server listens on |
+| `ALLOWED_ORIGINS` | no | `http://localhost:3000` | Comma-separated frontend addresses allowed to connect |
 
-    Client1->>WSClient: Type & Send Message
-    WSClient->>WSHandler: MESSAGE (WebSocket)
-    WSHandler->>WSHandler: Validate User & Room
-    WSHandler->>ChatService: Broadcast Message
-    ChatService->>MongoDB: Save Message
-    MongoDB-->>ChatService: Confirm Save
+### 3. Start the frontend
 
-    par Broadcast to all room members
-        ChatService->>WSHandler: Forward to Client1
-        ChatService->>WSHandler: Forward to Client2
-    end
-
-    WSHandler->>WSClient: NEW_MESSAGE
-    WSHandler->>Client2: NEW_MESSAGE
-
-    WSClient->>Client1: Update UI (Message List)
-    Client2->>Client2: Update UI (Message List)
-
-    Note over Client1,Client2: All users in the same room<br/>receive the message instantly
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm start
 ```
 
-## Technical Implementation
+The app opens at `http://localhost:3000`.
 
-### Concurrency Model
+| Variable | Default | Purpose |
+|---|---|---|
+| `REACT_APP_API_BASE_URL` | `http://localhost:8080` | Backend address, used for both the API and the WebSocket. It's included in the app when it's built, so set it before `npm run build`. |
 
-- **Goroutines**: Lightweight threads for each client connection
-- **Channels**: Type-safe communication between goroutines
-- **Mutexes**: Protection of shared data structures from concurrent access
+### 4. Try it
 
-### Data Model (MongoDB)
+Register two accounts and log in to each in a separate browser window (use a private window for the second one), join the same room, and chat.
 
-**Users Collection:**
+## API
 
-```json
-{
-  "_id": "user_id_uuid",
-  "username": "unique_username",
-  "password_hash": "hashed_password",
-  "salt": "salt_value",
-  "created_at": "timestamp"
-}
-```
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/auth/register` | Create an account and get a token |
+| `POST` | `/api/auth/login` | Log in and get a token |
+| `POST` | `/api/auth/validate` | Check a token (`Authorization: Bearer <token>`) |
+| `POST` | `/api/auth/refresh` | Get a new token (`Authorization: Bearer <token>`) |
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/info` | Lists the endpoints and message types |
+| `WS` | `/ws?token=<jwt>` | Chat connection |
 
-**Messages Collection:**
+### WebSocket messages
 
-```json
-{
-  "_id": "message_id_uuid",
-  "room_name": "general",
-  "sender_username": "user123",
-  "message_content": "Hello everyone!",
-  "timestamp": "iso_datetime"
-}
-```
+Every message is JSON shaped like `{ "type": "...", "payload": { ... } }`.
 
-**Rooms Collection:**
+| Client → server | | Server → client | |
+|---|---|---|---|
+| `JOIN` | Join a room (leaves the current one) | `JOINED_ROOM` / `LEFT_ROOM` | Confirms a join or leave |
+| `LEAVE` | Leave the current room | `USER_LIST` | Who's in the room, sent to everyone on each join and leave |
+| `MESSAGE` | Send a chat message | `USER_JOINED` / `USER_LEFT` | Someone joined or left the room |
+| `PING` | Check the connection | `NEW_MESSAGE` | A chat message, including your own |
+| | | `ROOM_HISTORY` | The last 50 messages, sent when you join |
+| | | `ERROR` / `PONG` | An error, or the reply to `PING` |
 
-```json
-{
-  "_id": "room_id_uuid",
-  "name": "room_name",
-  "created_at": "timestamp",
-  "creator_id": "user_id_uuid"
-}
-```
-
-## 📋 Prerequisites
-
-- Go (version 1.19 or higher)
-- Node.js & npm
-- MongoDB instance (local or remote)
-- Git
-
-## Installation & Setup
-
-### Backend Setup
-
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://github.com/your-username/gochat-realtime-messaging.git
-   cd gochat-realtime-messaging/backend
-   ```
-
-2. **Configure MongoDB:**
-   Ensure your MongoDB instance is running. The server will use `mongodb://localhost:27017` by default, or set the `MONGO_URI` environment variable.
-
-3. **Install dependencies:**
-
-   ```bash
-   go mod tidy
-   ```
-
-4. **Set environment variables (optional):**
-   ```bash
-   export MONGO_URI="mongodb://localhost:27017"
-   export PORT="8080"
-   ```
-
-5. **Run the server:**
-   ```bash
-   go run main.go
-   ```
-   Server will listen on `localhost:8080` by default.
-
-### Frontend Setup
-
-1. **Navigate to frontend directory:**
-
-   ```bash
-   cd ../frontend
-   ```
-
-2. **Install dependencies:**
-
-   ```bash
-   npm install
-   ```
-
-3. **Start development server:**
-   ```bash
-   npm start
-   ```
-   Application will open at `localhost:3000`.
-
-## Usage
-
-1. Ensure both backend and frontend are running
-2. Navigate to `localhost:3000` in your browser
-3. Register a new user account
-4. Log in with your credentials
-5. Join existing rooms or create new ones
-6. Start chatting! Open multiple tabs to simulate multiple users
-
-## API Endpoints
-
-### Authentication Endpoints
-
-- `POST /api/auth/register` - Register a new user
-- `POST /api/auth/login` - Login with username and password
-- `POST /api/auth/validate` - Validate JWT token (requires Authorization header)
-- `POST /api/auth/refresh` - Refresh JWT token (requires Authorization header)
-
-### Utility Endpoints
-
-- `GET /api/health` - Health check endpoint
-- `GET /api/info` - API information and available endpoints
-
-### WebSocket Endpoint
-
-- `WS /ws?token=<jwt_token>` - Real-time chat connection
-
-### WebSocket Message Types
-
-**Client to Server:**
-- `JOIN` - Join a chat room
-- `LEAVE` - Leave current room
-- `MESSAGE` - Send a chat message
-- `PING` - Connection health check
-
-**Server to Client:**
-- `JOINED_ROOM` - Confirmation of room join
-- `LEFT_ROOM` - Confirmation of room leave
-- `NEW_MESSAGE` - New chat message broadcast
-- `USER_JOINED` - User joined room notification
-- `USER_LEFT` - User left room notification
-- `USER_LIST` - Current users in room
-- `ROOM_HISTORY` - Historical messages for room
-- `ERROR` - Error message
-- `PONG` - Response to ping
-
-## Project Structure
+## Project structure
 
 ```
-gochat-realtime-messaging/
-├── backend/
-│   ├── main.go               # Server entry point
-│   ├── handlers/             # HTTP and WebSocket handlers
-│   │   ├── auth.go
-│   │   └── websockets.go
-│   ├── models/               # Data structures
-│   │   ├── user.go
-│   │   ├── message.go
-│   │   └── room.go
-│   ├── services/             # Business logic
-│   │   ├── auth_service.go
-│   │   └── chat_service.go
-│   ├── db/                   # MongoDB operations
-│   │   └── mongo.go
-│   ├── protocol/             # WebSocket message types
-│   │   └── messages.go
-│   ├── utils/                # Utility functions
-│   │   └── auth.go
-│   ├── go.mod
-│   └── go.sum
-├── frontend/
-│   ├── public/
-│   ├── src/
-│   │   ├── App.js            # Main React component
-│   │   ├── components/       # Reusable UI components
-│   │   ├── pages/            # Page components
-│   │   ├── services/         # WebSocket client logic
-│   │   │   └── websocket.js
-│   │   ├── styles/           # CSS files
-│   │   └── index.js
-│   ├── package.json
-│   └── README.md
-└── README.md
+backend/
+├── main.go              # Startup, routes, CORS
+├── handlers/            # HTTP auth endpoints and the WebSocket handler
+├── services/
+│   ├── auth_service.go  # Accounts, login, tokens
+│   ├── chat_service.go  # Room state, broadcasting, history
+│   └── client.go        # One WebSocket connection and its writer goroutine
+├── models/              # User, Message, Room
+├── protocol/            # WebSocket message types and payloads
+├── db/                  # MongoDB connection
+└── utils/               # JWT, bcrypt, allowed origins
+frontend/src/
+├── pages/               # LoginPage, ChatPage
+├── components/          # RoomSelector, MessageList, MessageInput, UserList
+├── services/websocket.js  # Connection, reconnect, message handling
+└── config.js            # Backend URL
 ```
 
-## Learning Outcomes
+## Known issues and roadmap
 
-This project provides hands-on experience with:
+These are known and tracked in the issues:
 
-- **Concurrent Programming in Go**: Mastering goroutines and channels
-- **WebSocket Protocol**: Implementing bi-directional, persistent communication
-- **Server-Side State Management**: Managing connected clients and rooms safely
-- **NoSQL Integration**: Working with MongoDB for flexible data storage
-- **Authentication Systems**: Implementing secure token-based authentication
-- **Full-Stack Development**: Connecting Go backend with React frontend
-- **Debugging Concurrent Systems**: Identifying and resolving race conditions
-- **Real-time Web Applications**: Building responsive, event-driven user interfaces
-- **JWT Authentication**: Implementing secure token-based authentication flows
-- **React State Management**: Managing complex application state and side effects
-- **WebSocket Client Development**: Handling connection management and reconnection logic
-- **Responsive Web Design**: Creating mobile-friendly, adaptive user interfaces
-- **RESTful API Design**: Structuring HTTP endpoints for authentication and data access
+- After an automatic reconnect you need to select the room again before you can send messages (#13).
+- Logging in as the same user in two tabs: the second tab can't receive messages (#14).
+- The room list is fixed, so custom rooms other people create don't show up in it (#19).
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 📞 Support
-
-If you encounter any issues or have questions, please open an issue on GitHub or contact the maintainers.
+Coming next: typing indicators and join/leave messages in the chat (#17, #18), a UI redesign (#20), tests and CI (#22–#25), load testing with published numbers (#26), and a live demo (#28).
