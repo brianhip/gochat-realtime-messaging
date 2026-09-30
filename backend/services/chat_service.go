@@ -111,8 +111,8 @@ func (s *ChatService) handleClientRegistration(reg *ClientRegistration) {
 	if room.AddClient(reg.Username, reg.Client) {
 		log.Printf("User %s joined room %s", reg.Username, reg.RoomName)
 		
-		// Send user list to the new client
-		s.sendUserListToClient(reg.Client, reg.RoomName, room.GetClientList())
+		// Send the updated user list to everyone in the room, including the new client
+		s.sendUserListToRoom(room)
 		
 		// Notify other clients about new user
 		userJoinedPayload := &protocol.UserJoinedPayload{
@@ -159,10 +159,12 @@ func (s *ChatService) handleClientUnregistration(unreg *ClientUnregistration) {
 			s.broadcastToRoom(unreg.RoomName, msg, unreg.Username)
 		}
 		
-		// Clean up empty room
+		// Clean up empty room, or send the remaining members the updated user list
 		if room.IsEmpty() {
 			delete(s.activeRooms, unreg.RoomName)
 			log.Printf("Cleaned up empty room: %s", unreg.RoomName)
+		} else {
+			s.sendUserListToRoom(room)
 		}
 	}
 }
@@ -319,10 +321,14 @@ func (s *ChatService) GetActiveRoomUsers(roomName string) []string {
 	return room.GetClientList()
 }
 
-// sendUserListToClient sends the current user list to a specific client
-func (s *ChatService) sendUserListToClient(client *Client, roomName string, users []string) {
+// sendUserListToRoom sends the room's current user list to every client in it
+// Must be called from the run goroutine with roomsMutex held. It queues on each
+// client directly instead of going through the broadcast channel, which only
+// this goroutine drains and so could deadlock if full
+func (s *ChatService) sendUserListToRoom(room *models.ActiveRoom) {
+	users := room.GetClientList()
 	userListPayload := &protocol.UserListPayload{
-		RoomName: roomName,
+		RoomName: room.Name,
 		Users:    users,
 		Count:    len(users),
 	}
@@ -333,7 +339,11 @@ func (s *ChatService) sendUserListToClient(client *Client, roomName string, user
 		return
 	}
 
-	client.Send(msg)
+	for _, client := range room.Clients {
+		if c, ok := client.Connection.(*Client); ok {
+			c.Send(msg)
+		}
+	}
 }
 
 // broadcastToRoom sends a message to all clients in a room
