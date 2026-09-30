@@ -80,37 +80,21 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 		log.Printf("Failed to upgrade connection: %v", err)
 		return
 	}
-	defer conn.Close()
+
+	// All writes go through the client's single writer goroutine, which
+	// also sends pings; closing the client stops it and closes the connection
+	client := services.NewClient(user.Username, conn)
+	go client.WritePump()
+	defer client.Close()
 
 	log.Printf("WebSocket connection established for user: %s", user.Username)
 
 	// Set up connection parameters
 	conn.SetReadLimit(512)
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
+	client.PrepareRead()
 
 	// Track current room for cleanup
 	var currentRoom string
-
-	// Start ping ticker for connection health
-	ticker := time.NewTicker(54 * time.Second)
-	defer ticker.Stop()
-
-	// Goroutine to send pings
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					return
-				}
-			}
-		}
-	}()
 
 	// Main message handling loop
 	for {
@@ -127,35 +111,40 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 		var wsMsg protocol.WebSocketMessage
 		if err := json.Unmarshal(messageBytes, &wsMsg); err != nil {
 			log.Printf("Invalid message format from user %s: %v", user.Username, err)
-			h.sendErrorMessage(conn, "INVALID_MESSAGE_FORMAT", "Invalid message format")
+			h.sendErrorMessage(client, "INVALID_MESSAGE_FORMAT", "Invalid message format")
 			continue
 		}
 
 		// Handle message based on type
 		switch wsMsg.Type {
 		case protocol.MessageTypeJoin:
-			currentRoom = h.handleJoinRoom(conn, user, wsMsg.Payload)
+			// A client is in at most one room; leave the current one first
+			if currentRoom != "" {
+				h.chatService.UnregisterClient(currentRoom, client)
+				currentRoom = ""
+			}
+			currentRoom = h.handleJoinRoom(client, user, wsMsg.Payload)
 		case protocol.MessageTypeLeave:
 			if currentRoom != "" {
-				h.handleLeaveRoom(conn, user, currentRoom)
+				h.handleLeaveRoom(client, user, currentRoom)
 				currentRoom = ""
 			}
 		case protocol.MessageTypeMessage:
 			if currentRoom != "" {
-				h.handleChatMessage(conn, user, currentRoom, wsMsg.Payload)
+				h.handleChatMessage(client, user, currentRoom, wsMsg.Payload)
 			} else {
-				h.sendErrorMessage(conn, "NOT_IN_ROOM", "You must join a room before sending messages")
+				h.sendErrorMessage(client, "NOT_IN_ROOM", "You must join a room before sending messages")
 			}
 		case protocol.MessageTypePing:
-			h.handlePing(conn, wsMsg.Payload)
+			h.handlePing(client, wsMsg.Payload)
 		default:
-			h.sendErrorMessage(conn, "UNKNOWN_MESSAGE_TYPE", "Unknown message type")
+			h.sendErrorMessage(client, "UNKNOWN_MESSAGE_TYPE", "Unknown message type")
 		}
 	}
 
 	// Clean up when connection closes
 	if currentRoom != "" {
-		h.chatService.UnregisterClient(currentRoom, user.Username)
+		h.chatService.UnregisterClient(currentRoom, client)
 		log.Printf("User %s disconnected from room %s", user.Username, currentRoom)
 	}
 
@@ -163,16 +152,16 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 }
 
 // handleJoinRoom processes a room join request
-func (h *WebSocketHandler) handleJoinRoom(conn *websocket.Conn, user *models.User, payload json.RawMessage) string {
+func (h *WebSocketHandler) handleJoinRoom(client *services.Client, user *models.User, payload json.RawMessage) string {
 	var joinPayload protocol.JoinRoomPayload
 	if err := json.Unmarshal(payload, &joinPayload); err != nil {
-		h.sendErrorMessage(conn, "INVALID_JOIN_PAYLOAD", "Invalid join room payload")
+		h.sendErrorMessage(client, "INVALID_JOIN_PAYLOAD", "Invalid join room payload")
 		return ""
 	}
 
 	// Validate that the username matches the authenticated user
 	if joinPayload.Username != user.Username {
-		h.sendErrorMessage(conn, "USERNAME_MISMATCH", "Username in payload doesn't match authenticated user")
+		h.sendErrorMessage(client, "USERNAME_MISMATCH", "Username in payload doesn't match authenticated user")
 		return ""
 	}
 
@@ -183,20 +172,20 @@ func (h *WebSocketHandler) handleJoinRoom(conn *websocket.Conn, user *models.Use
 		_, err = h.chatService.CreateRoom(joinPayload.RoomName, user.ID)
 		if err != nil {
 			log.Printf("Error creating room %s: %v", joinPayload.RoomName, err)
-			h.sendErrorMessage(conn, "ROOM_CREATION_FAILED", "Failed to create room")
+			h.sendErrorMessage(client, "ROOM_CREATION_FAILED", "Failed to create room")
 			return ""
 		}
 	}
 
 	// Register client with chat service
-	h.chatService.RegisterClient(joinPayload.RoomName, user.Username, conn)
+	h.chatService.RegisterClient(joinPayload.RoomName, client)
 
 	// Send room history to new client
 	history, err := h.chatService.GetRoomHistory(joinPayload.RoomName, 50)
 	if err != nil {
 		log.Printf("Error fetching room history: %v", err)
 	} else {
-		h.sendRoomHistory(conn, joinPayload.RoomName, history)
+		h.sendRoomHistory(client, joinPayload.RoomName, history)
 	}
 
 	// Send join confirmation
@@ -209,17 +198,16 @@ func (h *WebSocketHandler) handleJoinRoom(conn *websocket.Conn, user *models.Use
 
 	msg, err := protocol.NewWebSocketMessage(protocol.MessageTypeJoinedRoom, joinedPayload)
 	if err == nil {
-		conn.WriteJSON(msg)
+		client.Send(msg)
 	}
 
-	log.Printf("User %s joined room %s", user.Username, joinPayload.RoomName)
 	return joinPayload.RoomName
 }
 
 // handleLeaveRoom processes a room leave request
-func (h *WebSocketHandler) handleLeaveRoom(conn *websocket.Conn, user *models.User, roomName string) {
+func (h *WebSocketHandler) handleLeaveRoom(client *services.Client, user *models.User, roomName string) {
 	// Unregister client from chat service
-	h.chatService.UnregisterClient(roomName, user.Username)
+	h.chatService.UnregisterClient(roomName, client)
 
 	// Send leave confirmation
 	leftPayload := &protocol.LeftRoomPayload{
@@ -230,37 +218,37 @@ func (h *WebSocketHandler) handleLeaveRoom(conn *websocket.Conn, user *models.Us
 
 	msg, err := protocol.NewWebSocketMessage(protocol.MessageTypeLeftRoom, leftPayload)
 	if err == nil {
-		conn.WriteJSON(msg)
+		client.Send(msg)
 	}
 
 	log.Printf("User %s left room %s", user.Username, roomName)
 }
 
 // handleChatMessage processes a chat message from a client
-func (h *WebSocketHandler) handleChatMessage(conn *websocket.Conn, user *models.User, roomName string, payload json.RawMessage) {
+func (h *WebSocketHandler) handleChatMessage(client *services.Client, user *models.User, roomName string, payload json.RawMessage) {
 	var msgPayload protocol.MessagePayload
 	if err := json.Unmarshal(payload, &msgPayload); err != nil {
-		h.sendErrorMessage(conn, "INVALID_MESSAGE_PAYLOAD", "Invalid message payload")
+		h.sendErrorMessage(client, "INVALID_MESSAGE_PAYLOAD", "Invalid message payload")
 		return
 	}
 
 	// Validate that the username and room match
 	if msgPayload.Username != user.Username {
-		h.sendErrorMessage(conn, "USERNAME_MISMATCH", "Username in payload doesn't match authenticated user")
+		h.sendErrorMessage(client, "USERNAME_MISMATCH", "Username in payload doesn't match authenticated user")
 		return
 	}
 	if msgPayload.RoomName != roomName {
-		h.sendErrorMessage(conn, "ROOM_MISMATCH", "Room in payload doesn't match current room")
+		h.sendErrorMessage(client, "ROOM_MISMATCH", "Room in payload doesn't match current room")
 		return
 	}
 
 	// Validate message content
 	if len(msgPayload.Content) == 0 {
-		h.sendErrorMessage(conn, "EMPTY_MESSAGE", "Message content cannot be empty")
+		h.sendErrorMessage(client, "EMPTY_MESSAGE", "Message content cannot be empty")
 		return
 	}
 	if len(msgPayload.Content) > 1000 {
-		h.sendErrorMessage(conn, "MESSAGE_TOO_LONG", "Message content is too long")
+		h.sendErrorMessage(client, "MESSAGE_TOO_LONG", "Message content is too long")
 		return
 	}
 
@@ -271,7 +259,7 @@ func (h *WebSocketHandler) handleChatMessage(conn *websocket.Conn, user *models.
 	err := h.chatService.SaveMessage(message)
 	if err != nil {
 		log.Printf("Error saving message: %v", err)
-		h.sendErrorMessage(conn, "MESSAGE_SAVE_FAILED", "Failed to save message")
+		h.sendErrorMessage(client, "MESSAGE_SAVE_FAILED", "Failed to save message")
 		return
 	}
 
@@ -295,10 +283,10 @@ func (h *WebSocketHandler) handleChatMessage(conn *websocket.Conn, user *models.
 }
 
 // handlePing processes a ping message for connection health
-func (h *WebSocketHandler) handlePing(conn *websocket.Conn, payload json.RawMessage) {
+func (h *WebSocketHandler) handlePing(client *services.Client, payload json.RawMessage) {
 	var pingPayload protocol.PingPayload
 	if err := json.Unmarshal(payload, &pingPayload); err != nil {
-		h.sendErrorMessage(conn, "INVALID_PING_PAYLOAD", "Invalid ping payload")
+		h.sendErrorMessage(client, "INVALID_PING_PAYLOAD", "Invalid ping payload")
 		return
 	}
 
@@ -314,11 +302,11 @@ func (h *WebSocketHandler) handlePing(conn *websocket.Conn, payload json.RawMess
 		return
 	}
 
-	conn.WriteJSON(msg)
+	client.Send(msg)
 }
 
 // sendErrorMessage sends an error message to the client
-func (h *WebSocketHandler) sendErrorMessage(conn *websocket.Conn, code, message string) {
+func (h *WebSocketHandler) sendErrorMessage(client *services.Client, code, message string) {
 	errorPayload := &protocol.ErrorPayload{
 		Code:    code,
 		Message: message,
@@ -330,13 +318,11 @@ func (h *WebSocketHandler) sendErrorMessage(conn *websocket.Conn, code, message 
 		return
 	}
 
-	if err := conn.WriteJSON(msg); err != nil {
-		log.Printf("Error sending error message: %v", err)
-	}
+	client.Send(msg)
 }
 
 // sendRoomHistory sends historical messages to a client
-func (h *WebSocketHandler) sendRoomHistory(conn *websocket.Conn, roomName string, messages []*models.Message) {
+func (h *WebSocketHandler) sendRoomHistory(client *services.Client, roomName string, messages []*models.Message) {
 	historyPayload := &protocol.RoomHistoryPayload{
 		RoomName: roomName,
 		Messages: messages,
@@ -350,7 +336,5 @@ func (h *WebSocketHandler) sendRoomHistory(conn *websocket.Conn, roomName string
 		return
 	}
 
-	if err := conn.WriteJSON(msg); err != nil {
-		log.Printf("Error sending room history: %v", err)
-	}
+	client.Send(msg)
 }

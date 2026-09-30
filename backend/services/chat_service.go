@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -47,15 +46,16 @@ type BroadcastMessage struct {
 
 // ClientRegistration represents a new client joining a room
 type ClientRegistration struct {
-	RoomName   string
-	Username   string
-	Connection *websocket.Conn
+	RoomName string
+	Username string
+	Client   *Client
 }
 
 // ClientUnregistration represents a client leaving a room
 type ClientUnregistration struct {
 	RoomName string
 	Username string
+	Client   *Client // Only this connection is removed, not a newer one for the same user
 }
 
 // NewChatService creates a new chat service instance
@@ -108,11 +108,11 @@ func (s *ChatService) handleClientRegistration(reg *ClientRegistration) {
 	room := s.activeRooms[reg.RoomName]
 	
 	// Add client to room
-	if room.AddClient(reg.Username, reg.Connection) {
+	if room.AddClient(reg.Username, reg.Client) {
 		log.Printf("User %s joined room %s", reg.Username, reg.RoomName)
 		
 		// Send user list to the new client
-		s.sendUserListToClient(reg.Connection, reg.RoomName, room.GetClientList())
+		s.sendUserListToClient(reg.Client, reg.RoomName, room.GetClientList())
 		
 		// Notify other clients about new user
 		userJoinedPayload := &protocol.UserJoinedPayload{
@@ -135,6 +135,11 @@ func (s *ChatService) handleClientUnregistration(unreg *ClientUnregistration) {
 
 	room, exists := s.activeRooms[unreg.RoomName]
 	if !exists {
+		return
+	}
+
+	// Ignore stale unregistrations from a connection the user has since replaced
+	if client, ok := room.Clients[unreg.Username]; !ok || client.Connection != unreg.Client {
 		return
 	}
 
@@ -178,37 +183,32 @@ func (s *ChatService) handleBroadcast(broadcastMsg *BroadcastMessage) {
 			continue // Don't echo back to sender
 		}
 		
-		conn, ok := client.Connection.(*websocket.Conn)
+		c, ok := client.Connection.(*Client)
 		if !ok {
 			continue
 		}
 		
-		err := conn.WriteJSON(broadcastMsg.Message)
-		if err != nil {
-			log.Printf("Error sending message to %s: %v", username, err)
-			// Connection is broken, remove client
-			s.unregister <- &ClientUnregistration{
-				RoomName: broadcastMsg.RoomName,
-				Username: username,
-			}
-		}
+		// Queue without blocking; a slow or broken client is closed by its own
+		// write pump, and its read loop then unregisters it
+		c.Send(broadcastMsg.Message)
 	}
 }
 
 // RegisterClient adds a new client to a room
-func (s *ChatService) RegisterClient(roomName, username string, conn *websocket.Conn) {
+func (s *ChatService) RegisterClient(roomName string, client *Client) {
 	s.register <- &ClientRegistration{
-		RoomName:   roomName,
-		Username:   username,
-		Connection: conn,
+		RoomName: roomName,
+		Username: client.Username,
+		Client:   client,
 	}
 }
 
 // UnregisterClient removes a client from a room
-func (s *ChatService) UnregisterClient(roomName, username string) {
+func (s *ChatService) UnregisterClient(roomName string, client *Client) {
 	s.unregister <- &ClientUnregistration{
 		RoomName: roomName,
-		Username: username,
+		Username: client.Username,
+		Client:   client,
 	}
 }
 
@@ -320,7 +320,7 @@ func (s *ChatService) GetActiveRoomUsers(roomName string) []string {
 }
 
 // sendUserListToClient sends the current user list to a specific client
-func (s *ChatService) sendUserListToClient(conn *websocket.Conn, roomName string, users []string) {
+func (s *ChatService) sendUserListToClient(client *Client, roomName string, users []string) {
 	userListPayload := &protocol.UserListPayload{
 		RoomName: roomName,
 		Users:    users,
@@ -333,10 +333,7 @@ func (s *ChatService) sendUserListToClient(conn *websocket.Conn, roomName string
 		return
 	}
 
-	err = conn.WriteJSON(msg)
-	if err != nil {
-		log.Printf("Error sending user list to client: %v", err)
-	}
+	client.Send(msg)
 }
 
 // broadcastToRoom sends a message to all clients in a room
