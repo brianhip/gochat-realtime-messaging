@@ -22,6 +22,10 @@ function ChatPage({ user, token, onLogout }) {
   // Refs for managing component state
   const wsConnectedRef = useRef(false);
   const currentRoomRef = useRef('');
+  // Room we've asked to join but the server hasn't confirmed yet. The server
+  // sends the user list and history before JOINED_ROOM, so those must be
+  // accepted for this room too
+  const joiningRoomRef = useRef('');
   
   // Cache for storing messages per room
   const roomMessagesCache = useRef({});
@@ -69,6 +73,10 @@ function ChatPage({ user, token, onLogout }) {
     };
   }, [token]);
 
+  // Whether an event for this room should update the visible chat
+  const isActiveRoom = (roomName) =>
+    roomName === currentRoomRef.current || roomName === joiningRoomRef.current;
+
   // Set up WebSocket event listeners
   const setupWebSocketListeners = () => {
     // Connection events
@@ -91,6 +99,8 @@ function ChatPage({ user, token, onLogout }) {
     // Chat events
     websocketService.on('joinedRoom', (data) => {
       console.log('Joined room:', data);
+      currentRoomRef.current = data.room_name;
+      joiningRoomRef.current = '';
       setCurrentRoom(data.room_name);
       setIsJoiningRoom(false);
       setError('');
@@ -98,6 +108,7 @@ function ChatPage({ user, token, onLogout }) {
 
     websocketService.on('leftRoom', (data) => {
       console.log('Left room:', data);
+      currentRoomRef.current = '';
       setCurrentRoom('');
       // setMessages([]);
       setUsers([]);
@@ -111,7 +122,7 @@ function ChatPage({ user, token, onLogout }) {
       roomMessagesCache.current[data.room_name].push(data.message);
       
       // Only update UI if it's for the current room
-      if (data.room_name === currentRoomRef.current) {
+      if (isActiveRoom(data.room_name)) {
         setMessages(prev => [...prev, data.message]);
       }
     });
@@ -135,7 +146,7 @@ function ChatPage({ user, token, onLogout }) {
       roomUsersCache.current[data.room_name] = data.users || [];
       
       // Only update UI if it's for the current room
-      if (data.room_name === currentRoomRef.current) {
+      if (isActiveRoom(data.room_name)) {
         setUsers(data.users || []);
       }
     });
@@ -145,7 +156,7 @@ function ChatPage({ user, token, onLogout }) {
       roomMessagesCache.current[data.room_name] = data.messages || [];
       
       // Only update UI if it's for the current room
-      if (data.room_name === currentRoomRef.current) {
+      if (isActiveRoom(data.room_name)) {
         setMessages(data.messages || []);
       }
     });
@@ -168,6 +179,7 @@ function ChatPage({ user, token, onLogout }) {
         roomUsersCache.current[currentRoom] = users;
         
         websocketService.leaveRoom(currentRoom, user.username);
+        currentRoomRef.current = '';
         setCurrentRoom('');
         setMessages([]);
         setUsers([]);
@@ -183,8 +195,10 @@ function ChatPage({ user, token, onLogout }) {
           setUsers(roomUsersCache.current[roomName]);
         }
         
+        joiningRoomRef.current = roomName;
         const success = websocketService.joinRoom(roomName, user.username);
         if (!success) {
+          joiningRoomRef.current = '';
           throw new Error('Failed to send join request');
         }
 

@@ -316,11 +316,14 @@ class WebSocketService {
    * @returns {string} WebSocket URL
    */
   getWebSocketUrl() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Derive the backend host:port from the configured API base URL
-    // instead of hardcoding it, so this works against any deployed backend.
-    const host = API_BASE_URL.replace(/^https?:\/\//, '');
-    return `${protocol}//${host}/ws?token=${this.token}`;
+    // Derive the WebSocket URL from the configured API base URL, including
+    // the protocol: an https backend needs wss even if the page itself was
+    // served over http, and vice versa.
+    const url = new URL(API_BASE_URL);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/ws`;
+    url.search = `?token=${encodeURIComponent(this.token)}`;
+    return url.toString();
   }
 
   /**

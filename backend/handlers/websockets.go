@@ -13,6 +13,10 @@ import (
 	"gochat/services"
 )
 
+// maxIncomingMessageSize is the largest WebSocket frame (in bytes) the server
+// will read from a client before closing the connection
+const maxIncomingMessageSize = 8192
+
 // WebSocketHandler handles WebSocket connections for real-time chat
 // This handler manages client connections, message routing, and room operations
 type WebSocketHandler struct {
@@ -89,8 +93,10 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 
 	log.Printf("WebSocket connection established for user: %s", user.Username)
 
-	// Set up connection parameters
-	conn.SetReadLimit(512)
+	// Set up connection parameters. The read limit must fit a maximum-length
+	// message (1000 bytes of content) after JSON escaping, which can grow
+	// each byte to as many as 6 (\u00XX), plus the envelope around it
+	conn.SetReadLimit(maxIncomingMessageSize)
 	client.PrepareRead()
 
 	// Track current room for cleanup
