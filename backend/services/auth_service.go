@@ -43,17 +43,14 @@ func (s *AuthService) RegisterUser(username, password string) (*models.User, str
 		return nil, "", err
 	}
 
-	// Generate salt for password hashing
-	salt, err := utils.GenerateSalt()
+	// Hash the password with bcrypt
+	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
 		return nil, "", err
 	}
 
-	// Hash the password with salt
-	passwordHash := utils.HashPassword(password, salt)
-
 	// Create new user
-	user := models.NewUser(username, passwordHash, salt)
+	user := models.NewUser(username, passwordHash)
 
 	// Insert user into database
 	result, err := s.userCollection.InsertOne(ctx, user)
@@ -90,7 +87,7 @@ func (s *AuthService) LoginUser(username, password string) (*models.User, string
 	}
 
 	// Verify password
-	if !utils.VerifyPassword(password, user.Salt, user.PasswordHash) {
+	if !utils.VerifyPassword(password, user.PasswordHash) {
 		return nil, "", errors.New("invalid username or password")
 	}
 
