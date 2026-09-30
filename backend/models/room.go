@@ -45,7 +45,7 @@ type ClientConnection struct {
 	
 	// Connection is the WebSocket connection object
 	// Used to send messages directly to this client
-	Connection interface{} // We'll use *websocket.Conn when importing websocket package
+	Connection interface{} // Holds a *services.Client (typed as interface{} to avoid an import cycle)
 	
 	// JoinedAt tracks when the user joined this room session
 	// Used for connection management and debugging
