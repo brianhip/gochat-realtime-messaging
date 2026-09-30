@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,29 +15,72 @@ import (
 	"gochat/services"
 )
 
+// defaultAllowedOrigin is used when ALLOWED_ORIGINS is not set, matching
+// the origin of the frontend dev server (npm start).
+const defaultAllowedOrigin = "http://localhost:3000"
+
 // WebSocketHandler handles WebSocket connections for real-time chat
 // This handler manages client connections, message routing, and room operations
 type WebSocketHandler struct {
-	chatService *services.ChatService
-	authService *services.AuthService
-	upgrader    websocket.Upgrader
+	chatService    *services.ChatService
+	authService    *services.AuthService
+	upgrader       websocket.Upgrader
+	allowedOrigins map[string]bool
 }
 
 // NewWebSocketHandler creates a new WebSocket handler
 func NewWebSocketHandler(chatService *services.ChatService, authService *services.AuthService) *WebSocketHandler {
-	return &WebSocketHandler{
-		chatService: chatService,
-		authService: authService,
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// In production, you should validate the origin properly
-				// For development, we'll allow all origins
-				return true
-			},
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-		},
+	allowedOrigins := parseAllowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
+
+	h := &WebSocketHandler{
+		chatService:    chatService,
+		authService:    authService,
+		allowedOrigins: allowedOrigins,
 	}
+
+	h.upgrader = websocket.Upgrader{
+		CheckOrigin:     h.checkOrigin,
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+	}
+
+	return h
+}
+
+// parseAllowedOrigins builds an exact-match set of allowed origins from a
+// comma-separated env var value, falling back to defaultAllowedOrigin when
+// the value is empty.
+func parseAllowedOrigins(raw string) map[string]bool {
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultAllowedOrigin
+	}
+
+	origins := make(map[string]bool)
+	for _, origin := range strings.Split(raw, ",") {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			origins[origin] = true
+		}
+	}
+
+	return origins
+}
+
+// checkOrigin validates the WebSocket handshake's Origin header against the
+// configured allowlist using an exact match (no substring/prefix matching,
+// which could be bypassed with a crafted origin).
+func (h *WebSocketHandler) checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+
+	if h.allowedOrigins[origin] {
+		return true
+	}
+
+	log.Printf("[debug] rejected WebSocket connection from disallowed origin: %s", origin)
+	return false
 }
 
 // HandleWebSocket upgrades HTTP connections to WebSocket and manages client communication

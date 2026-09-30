@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import '../styles/LoginPage.css';
+import { API_BASE_URL } from '../config';
 
 /**
  * LoginPage component handles user authentication (login and registration)
@@ -51,7 +52,9 @@ function LoginPage({ onLogin }) {
 
     try {
       // Determine endpoint based on mode
-      const endpoint = isLoginMode ? '/api/auth/login' : '/api/auth/register';
+      const endpoint = isLoginMode
+        ? `${API_BASE_URL}/api/auth/login`
+        : `${API_BASE_URL}/api/auth/register`;
       
       // Make API request
       const response = await fetch(endpoint, {

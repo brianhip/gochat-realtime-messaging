@@ -3,6 +3,8 @@
  * This service manages the WebSocket connection, message sending, and event handling
  */
 
+import { API_BASE_URL } from '../config';
+
 class WebSocketService {
   constructor() {
     this.ws = null;
@@ -315,8 +317,9 @@ class WebSocketService {
    */
   getWebSocketUrl() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Use the backend server URL instead of frontend host
-    const host = 'localhost:8080';
+    // Derive the backend host:port from the configured API base URL
+    // instead of hardcoding it, so this works against any deployed backend.
+    const host = API_BASE_URL.replace(/^https?:\/\//, '');
     return `${protocol}//${host}/ws?token=${this.token}`;
   }
 
