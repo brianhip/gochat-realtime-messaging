@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,10 +12,6 @@ import (
 	"gochat/protocol"
 	"gochat/services"
 )
-
-// defaultAllowedOrigin is used when ALLOWED_ORIGINS is not set, matching
-// the origin of the frontend dev server (npm start).
-const defaultAllowedOrigin = "http://localhost:3000"
 
 // WebSocketHandler handles WebSocket connections for real-time chat
 // This handler manages client connections, message routing, and room operations
@@ -29,9 +23,8 @@ type WebSocketHandler struct {
 }
 
 // NewWebSocketHandler creates a new WebSocket handler
-func NewWebSocketHandler(chatService *services.ChatService, authService *services.AuthService) *WebSocketHandler {
-	allowedOrigins := parseAllowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
-
+// allowedOrigins is the exact-match set of origins permitted to connect
+func NewWebSocketHandler(chatService *services.ChatService, authService *services.AuthService, allowedOrigins map[string]bool) *WebSocketHandler {
 	h := &WebSocketHandler{
 		chatService:    chatService,
 		authService:    authService,
@@ -45,25 +38,6 @@ func NewWebSocketHandler(chatService *services.ChatService, authService *service
 	}
 
 	return h
-}
-
-// parseAllowedOrigins builds an exact-match set of allowed origins from a
-// comma-separated env var value, falling back to defaultAllowedOrigin when
-// the value is empty.
-func parseAllowedOrigins(raw string) map[string]bool {
-	if strings.TrimSpace(raw) == "" {
-		raw = defaultAllowedOrigin
-	}
-
-	origins := make(map[string]bool)
-	for _, origin := range strings.Split(raw, ",") {
-		origin = strings.TrimSpace(origin)
-		if origin != "" {
-			origins[origin] = true
-		}
-	}
-
-	return origins
 }
 
 // checkOrigin validates the WebSocket handshake's Origin header against the

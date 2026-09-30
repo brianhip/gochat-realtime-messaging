@@ -53,12 +53,15 @@ func main() {
 	authService := services.NewAuthService()
 	chatService := services.NewChatService()
 	
+	// Origins allowed to call the API and open WebSocket connections
+	allowedOrigins := utils.ParseAllowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
+
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService)
-	wsHandler := handlers.NewWebSocketHandler(chatService, authService)
+	wsHandler := handlers.NewWebSocketHandler(chatService, authService, allowedOrigins)
 
 	// Set up HTTP routes
-	setupRoutes(authHandler, wsHandler)
+	setupRoutes(authHandler, wsHandler, allowedOrigins)
 
 	// Start server
 	port := getEnvOrDefault("PORT", "8080")
@@ -73,7 +76,9 @@ func main() {
 
 // setupRoutes configures all HTTP routes for the application
 // This includes authentication endpoints, WebSocket upgrades, and static file serving
-func setupRoutes(authHandler *handlers.AuthHandler, wsHandler *handlers.WebSocketHandler) {
+func setupRoutes(authHandler *handlers.AuthHandler, wsHandler *handlers.WebSocketHandler, allowedOrigins map[string]bool) {
+	enableCORS := newCORSMiddleware(allowedOrigins)
+
 	// Authentication routes (no auth required)
 	http.HandleFunc("/api/auth/register", enableCORS(authHandler.Register))
 	http.HandleFunc("/api/auth/login", enableCORS(authHandler.Login))
@@ -211,24 +216,31 @@ func apiInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}`))
 }
 
-// enableCORS middleware adds CORS headers to allow frontend connections
-// This is essential for web applications making requests from different origins
-func enableCORS(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers
-		w.Header().Set("Access-Control-Allow-Origin", "*") // In production, set specific origins
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
+// newCORSMiddleware returns middleware that adds CORS headers for allowlisted origins
+// Only an exact match of the request's Origin is echoed back (never "*"), so
+// browsers block cross-origin reads from any other site
+func newCORSMiddleware(allowedOrigins map[string]bool) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			// The response depends on the Origin header, so caches must key on it
+			w.Header().Add("Vary", "Origin")
 
-		// Handle preflight requests
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
+			if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+				w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
+			}
+
+			// Handle preflight requests
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			// Call the next handler
+			next(w, r)
 		}
-
-		// Call the next handler
-		next(w, r)
 	}
 }
 
