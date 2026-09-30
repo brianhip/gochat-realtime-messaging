@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -240,8 +241,8 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// getCurrentTimestamp returns the current timestamp in ISO 8601 format
+// getCurrentTimestamp returns the current UTC timestamp in ISO 8601 format
 // This is used for health checks and logging
 func getCurrentTimestamp() string {
-	return "2025-01-01T00:00:00Z" // Placeholder - would use time.Now().Format(time.RFC3339) in real implementation
+	return time.Now().UTC().Format(time.RFC3339)
 }
