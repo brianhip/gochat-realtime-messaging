@@ -17,13 +17,9 @@ type User struct {
 	// It must be unique across all users in the system
 	Username string `bson:"username" json:"username"`
 	
-	// PasswordHash stores the hashed version of the user's password
+	// PasswordHash stores the bcrypt hash of the user's password (salt included)
 	// We never store plain text passwords for security reasons
 	PasswordHash string `bson:"password_hash" json:"-"` // json:"-" means this field won't be included in JSON responses
-	
-	// Salt is a random value used in password hashing to prevent rainbow table attacks
-	// Each user gets a unique salt to make password hashing more secure
-	Salt string `bson:"salt" json:"-"`
 	
 	// CreatedAt tracks when the user account was created
 	// This is useful for analytics and user management
@@ -32,11 +28,10 @@ type User struct {
 
 // NewUser creates a new User instance with the current timestamp
 // This is a constructor function that ensures CreatedAt is always set
-func NewUser(username, passwordHash, salt string) *User {
+func NewUser(username, passwordHash string) *User {
 	return &User{
 		Username:     username,
 		PasswordHash: passwordHash,
-		Salt:         salt,
 		CreatedAt:    time.Now(),
 	}
 }

@@ -1,13 +1,11 @@
 package utils
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // JWT secret key for signing tokens
@@ -30,41 +28,21 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// GenerateSalt creates a random salt for password hashing
-// Salt adds randomness to prevent rainbow table attacks
-func GenerateSalt() (string, error) {
-	// Generate 32 random bytes for the salt
-	salt := make([]byte, 32)
-	_, err := rand.Read(salt)
+// HashPassword creates a bcrypt hash of the password for storage
+// bcrypt is deliberately slow and generates and embeds its own random salt,
+// so no separate salt needs to be stored
+func HashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
-	
-	// Convert to hexadecimal string for storage
-	return hex.EncodeToString(salt), nil
+	return string(hash), nil
 }
 
-// HashPassword creates a secure hash of the password using salt
-// This implements PBKDF2 with SHA-256 for secure password storage
-func HashPassword(password, salt string) string {
-	// Combine password and salt
-	combined := password + salt
-	
-	// Create SHA-256 hash
-	hash := sha256.Sum256([]byte(combined))
-	
-	// Convert to hexadecimal string
-	return hex.EncodeToString(hash[:])
-}
-
-// VerifyPassword checks if the provided password matches the stored hash
+// VerifyPassword checks if the provided password matches the stored bcrypt hash
 // Returns true if password is correct, false otherwise
-func VerifyPassword(password, salt, storedHash string) bool {
-	// Hash the provided password with the same salt
-	computedHash := HashPassword(password, salt)
-	
-	// Compare with stored hash
-	return computedHash == storedHash
+func VerifyPassword(password, storedHash string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(password)) == nil
 }
 
 // GenerateJWT creates a JWT token for authenticated users

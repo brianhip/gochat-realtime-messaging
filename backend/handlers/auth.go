@@ -339,8 +339,9 @@ func (h *AuthHandler) validateRegistrationInput(req RegisterRequest) error {
 	if len(req.Password) < 6 {
 		return &ValidationError{"Password must be at least 6 characters long"}
 	}
-	if len(req.Password) > 128 {
-		return &ValidationError{"Password must be less than 128 characters"}
+	// bcrypt only accepts passwords up to 72 bytes
+	if len(req.Password) > 72 {
+		return &ValidationError{"Password must be at most 72 characters long"}
 	}
 
 	return nil
