@@ -81,8 +81,16 @@ function ChatPage({ user, token, onLogout }) {
   const setupWebSocketListeners = () => {
     // Connection events
     websocketService.on('open', () => {
+      wsConnectedRef.current = true;
       setConnectionStatus('connected');
       setError('');
+
+      // A reconnect gives us a new server connection that isn't in any room,
+      // so rejoin the room we were in. The server replies with the user list
+      // and history, which the listeners below pick up
+      if (currentRoomRef.current) {
+        websocketService.joinRoom(currentRoomRef.current, user.username);
+      }
     });
 
     websocketService.on('close', () => {
