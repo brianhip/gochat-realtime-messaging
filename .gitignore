@@ -10,7 +10,7 @@
 
 # Node.js ignores
 /frontend/node_modules
-/build
+/frontend/build
 .env
 .DS_Store
 npm-debug.log*
@@ -23,3 +23,6 @@ DEPLOYMENT.md
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Private planning (roadmap, requirements draft, learning log)
+/planning/
